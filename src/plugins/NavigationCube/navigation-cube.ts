@@ -497,9 +497,22 @@ export class NavigationCube implements IPlugin {
         gl.disable(gl.BLEND);
         gl.disable(gl.DEPTH_TEST);
 
+        // the cube uses its own [-1, 1] orthographic projection. When the viewer renders the
+        // reversed-Z pass it has switched clip control to ZERO_TO_ONE, which would clip away the
+        // half of the cube with clip.z < 0. Temporarily switch back to the standard clip convention
+        // for the cube's own draw (depth test is disabled, so this does not affect the model).
+        const reversed = this.viewer.reversedZActive;
+        if (reversed) {
+            this.viewer.setReversedClipSpace(false);
+        }
+
         //set uniform for colour coding to false
         gl.uniform1f(this._colourCodingUniformPointer, 0);
         this.draw(width, height);
+
+        if (reversed) {
+            this.viewer.setReversedClipSpace(true);
+        }
     }
 
     public onBeforeDrawId() { }
@@ -537,6 +550,9 @@ export class NavigationCube implements IPlugin {
         var fb = new Framebuffer(gl, this.viewer.width, this.viewer.height, this.viewer.hasDepthSupport, this.viewer.glVersion);
         gl.viewport(0, 0, this.viewer.width, this.viewer.height);
         gl.enable(gl.DEPTH_TEST); //we don't use any kind of blending or transparency
+        // this picking pass uses standard (non-reversed) depth, independent of the main canvas pass
+        gl.clearDepth(1.0);
+        gl.depthFunc(gl.LESS);
         gl.disable(gl.BLEND);
         // clear all
         gl.clearColor(0, 0, 0, 0); //zero colour for no-values

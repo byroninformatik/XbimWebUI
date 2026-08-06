@@ -1,17 +1,8 @@
 {
-  "name": "@xbim/viewer",
+  "name": "@byroninformatik/wexbim-viewer",
   "description": "WebGL 3D viewer for wexBIM files",
   "license": "CDDL-1.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/xBimTeam/XbimWebUI"
-  },
-  "author": {
-    "email": "info@xbim.net",
-    "name": "xBIM Ltd.",
-    "url": "https://www.xbim.net"
-  },
-  "version": "2.1.0",
+  "version": "2.2.0",
   "devDependencies": {
     "@types/node": "18.11.14",
     "@types/webgl2": "0.0.6",

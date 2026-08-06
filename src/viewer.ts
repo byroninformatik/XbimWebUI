@@ -2,6 +2,7 @@
 import { ModelGeometry, ReaderOptions, Region } from './reader/model-geometry';
 import { ModelHandle, DrawMode } from './model-handle';
 import { Framebuffer } from './framebuffer';
+import { SceneTarget } from './scene-target';
 import { ModelPointers } from './model-pointers';
 import { worker as LoaderWorker } from './workers/worker';
 
@@ -134,6 +135,69 @@ export class Viewer {
     public set pMatrix(value: mat4) { this._pMatrix = value; this.changed = true; }
 
     /**
+     * Whether reversed-Z depth can be used at all in this context: it requires WebGL2 **and** the
+     * `EXT_clip_control` extension (for ZERO_TO_ONE clip depth). Without clip control the fixed
+     * `0.5 * ndc + 0.5` window remap destroys the precision gain, so reversed-Z is pointless there.
+     * Read-only capability flag; setting {@link Viewer#reversedZEnabled} to true only takes effect
+     * when this is true.
+     */
+    public get reversedZSupported(): boolean {
+        return this.glVersion >= 2 && this._clipControlExt != null;
+    }
+
+    /**
+     * When enabled, the visible scene is rendered with a reversed-Z projection into an off-screen
+     * floating point depth buffer and then blitted to the canvas. This gives a nearly uniform depth
+     * precision over the whole view and eliminates z-fighting on thin, near-coplanar surfaces (e.g.
+     * building layers) without having to squeeze the near/far range per frame.
+     *
+     * Only effective when {@link Viewer#reversedZSupported} is true (WebGL2 + `EXT_clip_control`);
+     * setting it to true otherwise is silently ignored. Enabled by default where supported. Note that
+     * z-fighting is already handled by the per-frame adaptive near/far independently of this; reversed-Z
+     * only adds extra depth precision on top.
+     */
+    public get reversedZEnabled(): boolean { return this._reversedZEnabled; }
+    public set reversedZEnabled(value: boolean) {
+        // reversed-Z needs: WebGL2 (multisampled float depth renderbuffers + blitFramebuffer) and
+        // EXT_clip_control (ZERO_TO_ONE clip depth). Without clip control the [0,1] window remap
+        // destroys the precision gain, so reversed-Z is pointless and is silently disabled.
+        this._reversedZEnabled = value === true && this.reversedZSupported;
+        this.changed = true;
+    }
+
+    /**
+     * True while the viewer is currently rendering its reversed-Z (ZERO_TO_ONE clip control) canvas
+     * pass. Plugins that draw with their own [-1, 1] clip-space projection (e.g. the navigation cube)
+     * should consult this and use {@link Viewer#setReversedClipSpace} to switch clip control for the
+     * duration of their own draw. World-space plugins that use `viewer.pMatrix` need no change.
+     */
+    public get reversedZActive(): boolean { return this._reversedActiveThisPass; }
+
+    /**
+     * Upper bound for the far/near ratio of the per-frame adaptive near/far used with reversed-Z.
+     * The near plane is set to the nearest visible surface each frame (following the zoom, without
+     * clipping); this bound only kicks in as a safety floor for near when the camera is inside the
+     * model. Because reversed-Z keeps precision uniform over a large range, this can be large.
+     */
+    public get maxNearFarRatio(): number { return this._maxNearFarRatio; }
+    public set maxNearFarRatio(value: number) {
+        if (value != null && value > 1) { this._maxNearFarRatio = value; this.changed = true; }
+    }
+
+    /**
+     * Switches the depth clip-control convention. Only has an effect while reversed-Z is active.
+     * Pass `true` for the reversed ZERO_TO_ONE convention (matches the model), `false` for the
+     * standard NEGATIVE_ONE_TO_ONE convention (for overlays with their own [-1, 1] projection).
+     */
+    public setReversedClipSpace(reversed: boolean): void {
+        const ext = this._clipControlExt;
+        if (ext == null) {
+            return;
+        }
+        ext.clipControlEXT(ext.LOWER_LEFT_EXT, reversed ? ext.ZERO_TO_ONE_EXT : ext.NEGATIVE_ONE_TO_ONE_EXT);
+    }
+
+    /**
      * Switch between different rendering modes.
      * @member {String} Viewer#renderingMode
      */
@@ -247,6 +311,20 @@ export class Viewer {
     private _xrayColour: number[] = [80, 80, 80, 150];
     private _mvMatrix: mat4 = mat4.create();
     private _pMatrix: mat4 = mat4.create();
+
+    // reversed-Z depth buffer (WebGL2 only). Off-screen float-depth target used for the visible pass.
+    private _reversedZEnabled: boolean = false;
+    private _sceneTarget: SceneTarget = null;
+    // EXT_clip_control extension - required for reversed-Z to actually improve precision (ZERO_TO_ONE)
+    private _clipControlExt: any = null;
+    // true while the current draw is rendering the reversed-Z canvas pass (read by plugins)
+    private _reversedActiveThisPass: boolean = false;
+    // upper bound for the far/near ratio used by the per-frame adaptive near/far. When the camera is
+    // close to / inside the model the nearest bbox corner projects behind the camera (minProj <= 0),
+    // so near falls back to far/maxNearFarRatio. Keep this modest (50, matching the proven WebViewer
+    // setting): a large value lets near collapse toward 0, which makes the projection degenerate and
+    // destroys depth precision (reversed-Z included).
+    private _maxNearFarRatio: number = 50;
     private _renderingMode: RenderingMode = RenderingMode.NORMAL;
     private _mvMatrixTimestamp: number = Date.now();
     private _fpsWatch: FpsWatch;
@@ -373,10 +451,14 @@ export class Viewer {
         this.cameraProperties.far = 100;
 
         //*************************** Do all the set up of WebGL **************************
+        // antialias:false because on WebGL2 the visible frame is rendered through an off-screen
+        // multisampled target and resolved to the canvas with blitFramebuffer - which requires a
+        // single-sample default framebuffer. The target provides the antialiasing instead. On the
+        // WebGL1 fallback this means no MSAA (acceptable: WebGL1 is a degraded fallback path).
         WebGLUtils.setupWebGL(this.canvas, (ctx, version) => {
             this.gl = ctx;
             this.glVersion = version;
-        }, { preserveDrawingBuffer: true }, (err) => {
+        }, { preserveDrawingBuffer: true, antialias: false }, (err) => {
             this.error(err);
         });
 
@@ -436,6 +518,16 @@ export class Viewer {
         gl.enable(gl.DEPTH_TEST);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.enable(gl.BLEND);
+
+        // Enable the reversed-Z + floating point depth buffer by default on WebGL2. This gives a
+        // near-uniform depth precision and removes z-fighting on thin layers over a large depth
+        // range, without having to squeeze the near/far range per frame. Requires EXT_clip_control
+        // (ZERO_TO_ONE); the reversedZEnabled setter disables itself if it (or WebGL2) is missing.
+        if (this.glVersion >= 2) {
+            this._sceneTarget = new SceneTarget(gl as WebGL2RenderingContext);
+            this._clipControlExt = gl.getExtension('EXT_clip_control');
+            this.reversedZEnabled = true;
+        }
 
         //cache canvas width and height and change it only when size change
         // it is better to cache this value because it is used frequently and it takes a time to get a value from HTML
@@ -1488,6 +1580,39 @@ export class Viewer {
         let wcs = this.getCurrentWcs();
         let gl = this.gl;
 
+        let width = framebuffer ? framebuffer.width : this.width;
+        let height = framebuffer ? framebuffer.height : this.height;
+
+        // On WebGL2 the on-screen frame is rendered through an off-screen multisampled target and
+        // then blitted to the canvas. The target also carries a floating point depth buffer, which
+        // makes reversed-Z effective. It is used only for the visible canvas pass (no explicit
+        // framebuffer); off-screen passes (picking, camera adjustment) render directly with standard
+        // linear depth so their depth read-back stays valid. The target provides the antialiasing
+        // (the canvas context is created with antialias:false so the blit can resolve into it).
+        const useTarget = !framebuffer && this._sceneTarget != null &&
+            this._sceneTarget.ensureSize(width, height);
+        // reversed-Z is applied inside the target pass when enabled
+        const useReversed = useTarget && this._reversedZEnabled;
+
+        this._reversedActiveThisPass = useReversed;
+
+        // Bind the render target first so the clear below targets the right framebuffer.
+        if (useTarget) {
+            this._sceneTarget.bind();
+        }
+
+        if (useReversed) {
+            // Reversed-Z: store clip depth directly in [0, 1] (ZERO_TO_ONE), clear depth to 0 (far)
+            // and keep the fragment with the GREATER depth value.
+            this.setReversedClipSpace(true);
+            gl.clearDepth(0.0);
+            gl.depthFunc(gl.GREATER);
+        } else {
+            // Standard depth range for all other passes.
+            gl.clearDepth(1.0);
+            gl.depthFunc(gl.LESS);
+        }
+
         // set background colour
         gl.clearColor(this.background[0] / 255,
             this.background[1] / 255,
@@ -1497,12 +1622,19 @@ export class Viewer {
         // clear previous data in buffers
         // tslint:disable-next-line: no-bitwise
         this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
-        let width = framebuffer ? framebuffer.width : this.width;
-        let height = framebuffer ? framebuffer.height : this.height;
 
         // set right size of viewport
         gl.viewport(0, 0, width, height);
-        this.updatePMatrix(width, height);
+        // Adapt near/far to the visible region every frame so depth precision follows the zoom (and
+        // nothing is clipped). This is the primary z-fighting fix and is independent of reversed-Z:
+        // it runs for the whole visible canvas pass (standard depth benefits too, as WebViewer's
+        // DepthAdjustmentPlugin proves), while reversed-Z only adds extra precision on top when
+        // available. Off-screen passes (picking, camera adjustment) keep their own near/far.
+        if (!framebuffer && this.activeHandles.length > 0) {
+            this.adjustNearFarToView();
+        }
+        // when rendering the reversed pass, pMatrix (also read by world-space plugins) is reversed
+        this.updatePMatrix(width, height, useReversed);
 
         // set blending function
         gl.enable(gl.BLEND);
@@ -1578,6 +1710,10 @@ export class Viewer {
         // bind buffer if defined
         if (framebuffer) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer.framebuffer);
+        } else if (useTarget) {
+            // keep rendering into the off-screen target (a plugin's onBeforeDraw may have changed
+            // the binding)
+            this._sceneTarget.bind();
         } else {
             //set framebuffer to render into canvas (in case it was set for rendering to different framebuffer)
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1642,6 +1778,28 @@ export class Viewer {
                 plugin.onAfterDraw(width, height);
             });
         }
+
+        if (useTarget) {
+            // resolve the multisampled off-screen colour into the canvas
+            this._sceneTarget.blitToCanvas();
+            // restore the standard depth state and a standard (non-reversed) projection so that
+            // picking, BCF viewpoints and any external readers of pMatrix keep working with the
+            // usual NDC convention
+            gl.depthFunc(gl.LESS);
+            gl.clearDepth(1.0);
+            if (useReversed) {
+                // back to the standard NEGATIVE_ONE_TO_ONE clip convention for all off-screen passes
+                this.setReversedClipSpace(false);
+                this.updatePMatrix(width, height, false);
+                // re-upload the restored standard projection to the shader uniform. Off-loop passes
+                // (e.g. getEventDataRaw's first ID pass) reuse the uniform without re-uploading it
+                // and must not see the reversed matrix, otherwise their depth read-back
+                // reconstruction (which uses the standard pMatrix inverse) would be inconsistent.
+                gl = this.setActive();
+                gl.uniformMatrix4fv(this._pMatrixUniformPointer, false, this.pMatrix);
+            }
+        }
+        this._reversedActiveThisPass = false;
     }
 
     private getLightPosition(verticalOffset: number, horizontalOffset: number): vec3 {
@@ -1712,34 +1870,64 @@ export class Viewer {
         }
     }
 
-    private updatePMatrix(width: number, height: number) {
-        this.pMatrix = this.cameraProperties.getProjectionMatrix(width, height);
+    private updatePMatrix(width: number, height: number, reverseZ = false) {
+        this.pMatrix = this.cameraProperties.getProjectionMatrix(width, height, reverseZ);
     }
 
-    private getCameraDistanceFromRegion(): { near: number, far: number, size: number } {
-        let region = this.getMergedRegion();
-
-        if (!region.bbox || region.bbox.length === 0) {
-            return { near: 0, far: 0, size: 0 };
+    /**
+     * Adjusts near and far clipping planes to tightly bracket the visible model region along the
+     * current view direction, by projecting the 8 bounding-box corners onto that direction. Called
+     * every frame for the visible canvas pass (both standard and reversed-Z) so that depth precision
+     * follows the zoom (unlike a static near/far, which loses relative precision when zoomed in).
+     * `near` is set to the nearest visible surface, so nothing is clipped, while the far/near ratio
+     * stays bounded by `maxNearFarRatio`. Only writes when the values actually change, to avoid a
+     * permanent redraw loop when idle.
+     */
+    private adjustNearFarToView(): void {
+        const region = this.getMergedRegion();
+        if (!region || !region.bbox || region.bbox.length < 6) {
+            return;
         }
 
-        let camera = this.getCameraPosition();
-        let viewDir = vec3.normalize(vec3.create(), this.getCameraDirection());
-        let size = BBox.getDiagonalSize(region.bbox);
+        const cam = this.getCameraPosition();
+        const dir = this.getCameraDirection();
+        const dl = Math.hypot(dir[0], dir[1], dir[2]);
+        if (dl === 0) {
+            return;
+        }
+        const dx = dir[0] / dl, dy = dir[1] / dl, dz = dir[2] / dl;
 
-        let regionVec = vec3.subtract(vec3.create(), region.centre, camera);
-        let regionDir = vec3.normalize(vec3.create(), regionVec);
-        let regionDist = vec3.length(regionVec);
+        // project all 8 bounding-box corners (bbox = [minX, minY, minZ, sizeX, sizeY, sizeZ]) onto
+        // the view direction; the min/max are the actual nearest/farthest visible surfaces
+        const bb = region.bbox;
+        let minProj = Infinity, maxProj = -Infinity;
+        for (let i = 0; i < 8; i++) {
+            // tslint:disable: no-bitwise
+            const cx = bb[0] + ((i & 1) ? bb[3] : 0);
+            const cy = bb[1] + ((i & 2) ? bb[4] : 0);
+            const cz = bb[2] + ((i & 4) ? bb[5] : 0);
+            // tslint:enable: no-bitwise
+            const proj = dx * (cx - cam[0]) + dy * (cy - cam[1]) + dz * (cz - cam[2]);
+            if (proj < minProj) { minProj = proj; }
+            if (proj > maxProj) { maxProj = proj; }
+        }
+        if (maxProj <= 0) {
+            return; // whole model is behind the camera
+        }
 
-        let nearVec = vec3.scale(vec3.create(), regionDir, regionDist - size);
-        let farVec = vec3.scale(vec3.create(), regionDir, regionDist + size);
+        const far = maxProj;
+        // near = nearest visible surface (no clipping). Floored so it stays positive and the ratio
+        // stays bounded when the camera is inside the model.
+        let near = Math.max(minProj, far / this._maxNearFarRatio);
+        near = Math.max(near, far / 1e6);
 
-        let near = vec3.dot(viewDir, nearVec);
-        let far = vec3.dot(viewDir, farVec);
-
-        return { near, far, size };
+        const props = this.cameraProperties;
+        if (Math.abs(props.near - near) > 1e-6 * Math.max(1, Math.abs(near)) ||
+            Math.abs(props.far - far) > 1e-6 * Math.max(1, Math.abs(far))) {
+            props.near = near;
+            props.far = far;
+        }
     }
-
 
     /**
     * Use this method to get actual camera position.
@@ -2374,13 +2562,10 @@ export class Viewer {
                 this.fire('navigationEnd', true);
                 // navigation ended and there is something to draw, so draw it
                 if (this.activeHandles.length > 0) {
-
-                    // this will minimize z-fighting when zoomed far away from the model with thin layers
-                    var { near, far, size } = this.getCameraDistanceFromRegion();
-                    if (near > 0 && far > 0) {
-                        this.cameraProperties.near = near;
-                        this.cameraProperties.far = far;
-                    } 
+                    // near/far is set per-frame inside draw() by adjustNearFarToView(), which tightly
+                    // brackets the visible region and follows the zoom. The old settle-only narrowing
+                    // is therefore retired - it caused visible popping of the clipping planes between
+                    // movement and rest, and only helped at large distance.
                     this.draw();
                 }
                 this._requestAnimationFrame(tick);
@@ -2391,9 +2576,8 @@ export class Viewer {
             if (isMoving === false)
             {
                 isMoving = true;
-                var { near, far, size } = this.getCameraDistanceFromRegion();
-                this.cameraProperties.near = this.meter * 0.2;
-                this.cameraProperties.far = size * 5;
+                // near/far is handled per-frame by adjustNearFarToView() inside draw(); no separate
+                // widening on movement start is needed (that caused the clipping-plane popping).
                 this.fire('navigationStart', true);
             }
             if (fps < 10 && this.performance > PerformanceRating.VERY_LOW) {
