@@ -23,7 +23,9 @@
     "docs": "typedoc --tsconfig ./tsconfig.json",
     "start": "concurrently \"webpack serve --config webpack.dev.js --mode development\" \"webpack --watch --config webpack.worker.js \"",
     "build": "webpack --config webpack.worker.js&&webpack --config webpack.prod.js&&node utilities/copy-package-json.js",
-    "build:dev": "webpack --config webpack.worker.js&&webpack --config webpack.dev.js"
+    "build:dev": "webpack --config webpack.worker.js&&webpack --config webpack.dev.js",
+    "publish": "npm publish ./dist",
+    "make": "npm run build && npm run publish"
   },
   "dependencies": {
     "gl-matrix": "^3.4.3"
