@@ -23,8 +23,8 @@ import { KeyboardNavigation } from './navigation/keyboard-navigation';
 import { TouchNavigation } from './navigation/touch-navigation';
 import { Abilities } from './common/abilities';
 import { CheckResult, } from './common/checkResult';
-import { Animations, EasingType } from './navigation/animations';
-import { mat4, vec3, mat3, quat, vec4 } from 'gl-matrix';
+import { Animations } from './navigation/animations';
+import { mat4, vec3, mat3, quat } from 'gl-matrix';
 import { PerformanceRating } from './performance-rating';
 import { CameraProperties, CameraType } from './camera';
 import { SectionBox } from './section-box';
@@ -119,6 +119,35 @@ export class Viewer {
      */
     public get xrayColour(): number[] { return this._xrayColour; }
     public set xrayColour(value: number[]) { this._xrayColour = value; this.changed = true; }
+
+    /**
+     * When true (default), the feature edges (boundary and creases) of visible IfcSpace elements are
+     * outlined with {@link Viewer#spaceEdgeColour}, so space blocks are easier to read against the
+     * semitransparent fill. Has no effect for hidden spaces.
+     * @member {boolean} Viewer#spaceEdgesVisible
+     */
+    public get spaceEdgesVisible(): boolean { return this._spaceEdgesVisible; }
+    public set spaceEdgesVisible(value: boolean) { this._spaceEdgesVisible = value === true; this.changed = true; }
+
+    /**
+     * Array of four integers between 0 and 255 (RGBA) for the IfcSpace outline colour. Instant effect.
+     * @member {Number[]} Viewer#spaceEdgeColour
+     */
+    public get spaceEdgeColour(): number[] { return this._spaceEdgeColour; }
+    public set spaceEdgeColour(value: number[]) { this._spaceEdgeColour = value; this.changed = true; }
+
+    /**
+     * Array of four integers between 0 and 255 (RGBA) for the IfcSpace/opening fill colour and
+     * transparency. Setting it recolours all spaces of all loaded models at once; models loaded
+     * afterwards keep this colour too. Lower the alpha to make spaces more transparent.
+     * @member {Number[]} Viewer#spaceFillColour
+     */
+    public get spaceFillColour(): number[] { return this._spaceFillColour; }
+    public set spaceFillColour(value: number[]) {
+        this._spaceFillColour = value;
+        this._handles.forEach((h) => h.setSpaceFillColour(value));
+        this.changed = true;
+    }
 
     /**
      * World matrix
@@ -309,6 +338,9 @@ export class Viewer {
     private _highlightingColour: number[] = [255, 173, 33, 255];
     private _hoverPickColour: number[] = [0, 255, 0, 255];
     private _xrayColour: number[] = [80, 80, 80, 150];
+    private _spaceEdgesVisible: boolean = true;
+    private _spaceEdgeColour: number[] = [9, 87, 117, 200];
+    private _spaceFillColour: number[] = null; // null keeps the model's default space style
     private _mvMatrix: mat4 = mat4.create();
     private _pMatrix: mat4 = mat4.create();
 
@@ -349,6 +381,8 @@ export class Viewer {
     private _stateStyleSamplerUniform: WebGLUniformLocation;
     private _gammaContrastBrightnessUniform: WebGLUniformLocation;
     private _sectionBoxUniform: WebGLUniformLocation;
+    private _edgePassUniformPointer: WebGLUniformLocation;
+    private _edgeColourUniformPointer: WebGLUniformLocation;
 
     private _gamma: number = 1.0;
     private _contrast: number = 1.0;
@@ -1276,6 +1310,11 @@ export class Viewer {
         handle.tag = tag;
         this._handles.push(handle);
 
+        //apply a custom space fill colour (if one was set) to this newly loaded model too
+        if (this._spaceFillColour != null) {
+            handle.setSpaceFillColour(this._spaceFillColour);
+        }
+
         //set perspective camera near and far based on 1 meter dimension and size of the model
         this.setNearAndFarFromCurrentModels();
 
@@ -1435,6 +1474,8 @@ export class Viewer {
         this._stateStyleSamplerUniform = gl.getUniformLocation(this._shaderProgram, 'uStateStyleSampler');
         this._gammaContrastBrightnessUniform = gl.getUniformLocation(this._shaderProgram, 'uGBC');
         this._sectionBoxUniform = gl.getUniformLocation(this._shaderProgram, 'uSectionBox');
+        this._edgePassUniformPointer = gl.getUniformLocation(this._shaderProgram, 'uEdgePass');
+        this._edgeColourUniformPointer = gl.getUniformLocation(this._shaderProgram, 'uEdgeColour');
 
         this._pointers = new ModelPointers(gl, this._shaderProgram);
 
@@ -1707,6 +1748,17 @@ export class Viewer {
                     this.xrayColour[3] / 255.0
                 ]));
 
+        // default to the normal (non-edge) shading path; the space-edge pass flips this on per draw
+        gl.uniform1i(this._edgePassUniformPointer, 0);
+        gl.uniform4fv(this._edgeColourUniformPointer,
+            new Float32Array(
+                [
+                    this.spaceEdgeColour[0] / 255.0,
+                    this.spaceEdgeColour[1] / 255.0,
+                    this.spaceEdgeColour[2] / 255.0,
+                    this.spaceEdgeColour[3] / 255.0
+                ]));
+
         // bind buffer if defined
         if (framebuffer) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer.framebuffer);
@@ -1766,6 +1818,21 @@ export class Viewer {
                         handle.draw(DrawMode.TRANSPARENT, handle.pinned ? 100 : percent);
                     }
                 });
+            }
+
+            // outline visible IfcSpace blocks on top of the fills. Only in the visible canvas pass
+            // (never during picking / off-screen passes, which set a framebuffer). Reuses the same
+            // vertex path, so hidden spaces stay discarded and transforms/WCS line up automatically.
+            if (this.spaceEdgesVisible && !framebuffer) {
+                gl.uniform1i(this._edgePassUniformPointer, 1);
+                gl.depthMask(true);
+                this._handles.forEach((handle) => {
+                    if (!handle.stopped) {
+                        handle.setActive(this._pointers, wcs);
+                        handle.drawSpaceEdges();
+                    }
+                });
+                gl.uniform1i(this._edgePassUniformPointer, 0);
             }
         }
 
@@ -2573,8 +2640,7 @@ export class Viewer {
             }
 
             // we are on the move. Set the performance indicator based on the current FPS
-            if (isMoving === false)
-            {
+            if (isMoving === false) {
                 isMoving = true;
                 // near/far is handled per-frame by adjustNearFarToView() inside draw(); no separate
                 // widening on movement start is needed (that caused the clipping-plane popping).

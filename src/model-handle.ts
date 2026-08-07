@@ -140,6 +140,10 @@ export class ModelHandle {
     private _stateBuffer: WebGLBuffer;
     private _transformationBuffer: WebGLBuffer;
 
+    //element (index) buffer of IfcSpace feature edges, drawn as gl.LINES over the model geometry
+    private _spaceEdgeBuffer: WebGLBuffer;
+    private _numberOfSpaceEdgeIndices: number = 0;
+
     private _clippingPlaneA: number[] = null;
     private _clippingPlaneB: number[] = null;
     private _clippingA: boolean = false;
@@ -288,6 +292,7 @@ export class ModelHandle {
         this._styleBuffer = gl.createBuffer();
         this._stateBuffer = gl.createBuffer();
         this._transformationBuffer = gl.createBuffer();
+        this._spaceEdgeBuffer = gl.createBuffer();
     }
 
     /**
@@ -502,6 +507,38 @@ export class ModelHandle {
         }
     }
 
+    /**
+     * Draws the pre-computed IfcSpace feature edges as lines. Reuses the currently active attribute
+     * buffers/textures and shader (call setActive first), so positions, transformations, world
+     * coordinate system and per-object visibility all come from the same vertex path as the fills -
+     * hidden spaces are discarded automatically. The caller sets the edge colour uniform / edge pass.
+     */
+    public drawSpaceEdges(): void {
+        if (this.stopped || this.empty || this._numberOfSpaceEdgeIndices === 0) {
+            return;
+        }
+        var gl = this._glVersion === 1 ? this.gl1 : this.gl2;
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._spaceEdgeBuffer);
+        gl.drawElements(gl.LINES, this._numberOfSpaceEdgeIndices, gl.UNSIGNED_INT, 0);
+    }
+
+    /**
+     * Changes the fill colour (and transparency) of all IfcSpace/opening surfaces of this model by
+     * rewriting the fixed space style (id -2) in the style texture. RGBA components are 0-255.
+     */
+    public setSpaceFillColour(colour: number[]): void {
+        if (this.empty || this._model == null || this._model.styles == null ||
+            this._model.spaceStyleIndex < 0 || colour == null || colour.length < 4) {
+            return;
+        }
+        var gl = this._glVersion === 1 ? this.gl1 : this.gl2;
+        this._model.styles.set(
+            [colour[0], colour[1], colour[2], colour[3]],
+            this._model.spaceStyleIndex * 4);
+        this._styleTextureSize = ModelHandle.bufferTexture(gl, this._styleTexture, this._model.styles);
+        this._changed = true;
+    }
+
     public getProductId(renderId: number): number {
         if (this.empty) {
             return null;
@@ -579,6 +616,7 @@ export class ModelHandle {
         gl.deleteBuffer(this._styleBuffer);
         gl.deleteBuffer(this._stateBuffer);
         gl.deleteBuffer(this._transformationBuffer);
+        gl.deleteBuffer(this._spaceEdgeBuffer);
     }
 
     private InitGPU(gl: WebGLRenderingContext, model: ModelGeometry, progress: (msg: Message) => void) {
@@ -610,6 +648,20 @@ export class ModelHandle {
         report(60);
         this.bufferData(this._styleBuffer, model.styleIndices);
 
+        //fill the IfcSpace edge element buffer. drawElements with 32-bit indices needs WebGL2 or the
+        //OES_element_index_uint extension on WebGL1; if unavailable we skip the outline (and say so).
+        if (model.spaceEdgeIndices && model.spaceEdgeIndices.length > 0) {
+            const uintOk = this._glVersion === 2 || gl.getExtension('OES_element_index_uint') != null;
+            if (uintOk) {
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._spaceEdgeBuffer);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, model.spaceEdgeIndices, gl.STATIC_DRAW);
+                this._numberOfSpaceEdgeIndices = model.spaceEdgeIndices.length;
+            } else {
+                this._numberOfSpaceEdgeIndices = 0;
+                console.log('IfcSpace edge outlines need 32-bit element indices (OES_element_index_uint), which are not available on this WebGL1 context - space edges are disabled.');
+            }
+        }
+
         //fill in all textures
         this._vertexTextureSize = ModelHandle.bufferTexture(gl, this._vertexTexture, model.vertices, 3);
         report(80);
@@ -626,6 +678,7 @@ export class ModelHandle {
         model.products = null;
         model.transformations = null;
         model.styleIndices = null;
+        model.spaceEdgeIndices = null;
 
         model.vertices = null;
         model.matrices = null;

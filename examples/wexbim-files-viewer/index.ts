@@ -1,7 +1,7 @@
-import { Viewer, Product, State, ViewType, RenderingMode, ProductType, NavigationCube, ViewerInteractionEvent, InteractiveClippingPlane } from '../..';
+import { Viewer, State, ViewType, RenderingMode, ProductType, NavigationCube, ViewerInteractionEvent, InteractiveClippingPlane } from '../..';
 import { Grid } from '../../src/plugins/Grid/grid';
 import { vec3 } from 'gl-matrix';
-import { Snapshot, Viewpoint } from '../../src/bcf';
+import { Viewpoint } from '../../src/bcf';
 import { LoaderOverlay } from '../../src/plugins/LoaderOverlay/loader-overlay';
 import { PlaySpaces } from '../featured-viewer/play-spaces';
 
@@ -53,6 +53,11 @@ viewer.on("pick", (arg) => {
 });
 viewer.on("loaded", (evt) => {
     models.push({ id: evt.model, name: evt.tag, stopped: false });
+    // spaces are hidden by default - switch them on so the semitransparent fill and the
+    // outlined edges (viewer.spaceEdgesVisible) are visible for this model
+    viewer.setState(State.UNDEFINED, ProductType.IFCSPACE, evt.model);
+    // space edges are visible by default - switch them off
+    // viewer.spaceEdgesVisible = false;
     viewer.show(ViewType.DEFAULT, undefined, undefined, false);
     loader.hide();
     refreshModelsPanel();

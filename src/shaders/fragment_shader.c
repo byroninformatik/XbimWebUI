@@ -14,6 +14,10 @@ uniform vec3 uLight;
 // Frustum test
 uniform mat4 uSectionBox;
 
+// when true, output a flat edge colour (used for the IfcSpace outline line pass) instead of shading
+uniform bool uEdgePass;
+uniform vec4 uEdgeColour;
+
 varying vec4 vColor;
 //position in real world. This is used for clipping.
 varying vec3 vPosition;
@@ -61,6 +65,12 @@ void main(void) {
 		}
 	}
 	
+	// edge outline pass: flat colour, no shading (respects discard/clipping/section box above)
+	if (uEdgePass) {
+		gl_FragColor = uEdgeColour;
+		return;
+	}
+
 	// it is colour coding. Don't to shading and lighting or anything else
 	if (length(vNormal) < 0.1) {
 		gl_FragColor = vColor;

@@ -1,6 +1,6 @@
 ﻿import { BinaryReader } from "./binary-reader";
 import { TriangulatedShape } from "./triangulated-shape";
-import { State, StatePriorities } from "../common/state";
+import { State } from "../common/state";
 import { ProductType } from "../product-type";
 import { LoadingPhase, Message, MessageType } from "../common/message";
 import { ProductMap } from "../common/product-map";
@@ -41,6 +41,13 @@ export class ModelGeometry {
     public matrices = new Float32Array(0);
     public styles = new Uint8Array(0);
 
+    //feature edges (boundary + crease) of IfcSpace geometry, as pairs of indices into the
+    //vertex stream above (aVertexIndex/aState/... arrays). Drawn as gl.LINES to outline spaces.
+    public spaceEdgeIndices = new Uint32Array(0);
+    //index of the fixed space/opening style (id -2) inside the styles texture, so the space fill
+    //colour can be changed at runtime (the private _styleMap is not transferred from the worker)
+    public spaceStyleIndex = -1;
+
     public meter = 1000;
     public wcs = [0, 0, 0];
 
@@ -60,6 +67,8 @@ export class ModelGeometry {
     private _iTransform = 0;
     private _iMatrix = 0;
     private _maxVersionSupported = 4;
+    //accumulates IfcSpace feature-edge index pairs during parsing (finalised into spaceEdgeIndices)
+    private _spaceEdges: number[] = [];
 
     public productMaps: { [id: number]: ProductMap } = {};
     public productIdLookup = [];
@@ -130,6 +139,7 @@ export class ModelGeometry {
         this._iIndexBackward = numTriangles * 3;
         this._iTransform = 0;
         this._iMatrix = 0;
+        this._spaceEdges = [];
 
         for (let i = 0; i < numRegions; i++) {
             let region = new Region();
@@ -154,10 +164,12 @@ export class ModelGeometry {
         this.styles.set([255, 255, 255, 255], iStyle * 4);
         this._styleMap.Add({ id: -1, index: iStyle, transparent: false });
 
-        // default space and opening style
+        // default space and opening style (blue, more transparent so the model stays readable;
+        // can be overridden at runtime via viewer.spaceFillColour)
         iStyle++;
-        this.styles.set([0, 255, 255, 100], iStyle * 4);
+        this.styles.set([9, 87, 117, 120], iStyle * 4);
         this._styleMap.Add({ id: -2, index: iStyle, transparent: false });
+        this.spaceStyleIndex = iStyle;
 
         for (let i = 0; i < numProducts; i++) {
             let productLabel = br.readInt32();
@@ -218,7 +230,7 @@ export class ModelGeometry {
                         const labelA = a.shapes[0]?.pLabel;
                         const labelB = b.shapes[0]?.pLabel;
 
-                        if (labelA == null || labelB == null){
+                        if (labelA == null || labelB == null) {
                             return 0
                         }
 
@@ -281,6 +293,10 @@ export class ModelGeometry {
         //set value of transparent index divider for two phase rendering (simplified ordering)
         this.transparentIndex = this._iIndexForward;
         this.breaks[100] = [this.transparentIndex - 1, this.transparentIndex];
+
+        //finalise the collected IfcSpace feature edges
+        this.spaceEdgeIndices = new Uint32Array(this._spaceEdges);
+        this._spaceEdges = [];
     }
 
     /**
@@ -306,6 +322,9 @@ export class ModelGeometry {
     }
 
     private feedDataArrays(shapes: ShapeRecord[], geometry: TriangulatedShape) {
+        //feature edges of this geometry are the same for every instance, so compute them lazily once
+        //and only when an IfcSpace instance actually uses this geometry
+        let spaceEdgePairs: number[] | null = null;
         //copy shape data into inner array and set to null so it can be garbage collected
         shapes.forEach((shape) => {
             let iIndex = 0;
@@ -332,7 +351,7 @@ export class ModelGeometry {
             this.normals.set(geometry.normals, iIndex * 2);
 
             //switch spaces and openings off by default 
-            let state = map.type === ProductType.IFCSPACE 
+            let state = map.type === ProductType.IFCSPACE
                 ? State.HIDDEN
                 : 0xFF; //0xFF is for the default state
 
@@ -350,6 +369,17 @@ export class ModelGeometry {
 
             let end = iIndex;
             map.spans.push(new Int32Array([begin, end]));
+
+            //collect feature edges for spaces so they can be outlined. The corner order written above
+            //matches geometry.indices, so stream index of corner k is (begin + k).
+            if (map.type === ProductType.IFCSPACE) {
+                if (spaceEdgePairs === null) {
+                    spaceEdgePairs = this.computeFeatureEdges(geometry);
+                }
+                for (let p = 0; p < spaceEdgePairs.length; p++) {
+                    this._spaceEdges.push(begin + spaceEdgePairs[p]);
+                }
+            }
 
             if (shape.transparent) {
                 this._iIndexBackward -= geometry.indices.length;
@@ -372,6 +402,71 @@ export class ModelGeometry {
         //this must be the last step to have correct iVertex number above
         this.vertices.set(geometry.vertices, this._iVertex);
         this._iVertex += geometry.vertices.length;
+    }
+
+    /**
+     * Extracts the "feature edges" of a triangulated shape: boundary edges (used by a single
+     * triangle) and crease edges (where the two adjacent faces differ by more than a threshold
+     * angle). Coplanar triangulation diagonals are dropped, so the result outlines the block/face
+     * boundaries rather than the raw mesh. Returns a flat list of corner-index pairs referring to
+     * positions within geometry.indices (0-based), so the caller can offset them into the vertex
+     * stream. Only used for IfcSpace, whose geometry is small.
+     */
+    private computeFeatureEdges(geometry: TriangulatedShape): number[] {
+        const verts = geometry.vertices;
+        const idx = geometry.indices;
+        if (!verts || !idx || idx.length < 3) {
+            return [];
+        }
+        const triCount = idx.length / 3;
+        // quantise positions so shared vertices with tiny float differences map to the same key
+        const eps = (this.meter || 1000) * 1e-4; // ~0.1 mm for models in millimetres
+        const invEps = 1 / eps;
+        const q = (v: number) => Math.round(v * invEps);
+        const posKey = (vi: number) => `${q(verts[vi * 3])}_${q(verts[vi * 3 + 1])}_${q(verts[vi * 3 + 2])}`;
+
+        // keep an edge if its adjacent faces differ by more than 25 degrees (box corners ~90 deg
+        // are kept, coplanar diagonals ~0 deg are dropped)
+        const creaseCos = Math.cos(25 * Math.PI / 180);
+        const edges = new Map<string, { nx: number, ny: number, nz: number, k0: number, k1: number, keep: boolean }>();
+
+        for (let t = 0; t < triCount; t++) {
+            const k0 = 3 * t, k1 = 3 * t + 1, k2 = 3 * t + 2;
+            const vi0 = idx[k0], vi1 = idx[k1], vi2 = idx[k2];
+            // face normal from the triangle winding
+            const ax = verts[vi1 * 3] - verts[vi0 * 3], ay = verts[vi1 * 3 + 1] - verts[vi0 * 3 + 1], az = verts[vi1 * 3 + 2] - verts[vi0 * 3 + 2];
+            const bx = verts[vi2 * 3] - verts[vi0 * 3], by = verts[vi2 * 3 + 1] - verts[vi0 * 3 + 1], bz = verts[vi2 * 3 + 2] - verts[vi0 * 3 + 2];
+            let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+            const len = Math.hypot(nx, ny, nz) || 1;
+            nx /= len; ny /= len; nz /= len;
+
+            const cornerA = [k0, k1, k2];
+            const cornerB = [k1, k2, k0];
+            const viA = [vi0, vi1, vi2];
+            const viB = [vi1, vi2, vi0];
+            for (let e = 0; e < 3; e++) {
+                const ka = posKey(viA[e]);
+                const kb = posKey(viB[e]);
+                const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+                const existing = edges.get(key);
+                if (!existing) {
+                    // first time we see this edge: assume boundary (kept) until a second face appears
+                    edges.set(key, { nx, ny, nz, k0: cornerA[e], k1: cornerB[e], keep: true });
+                } else {
+                    // shared edge: keep only if the two faces form a crease (not coplanar)
+                    const dot = Math.abs(existing.nx * nx + existing.ny * ny + existing.nz * nz);
+                    existing.keep = dot < creaseCos;
+                }
+            }
+        }
+
+        const result: number[] = [];
+        edges.forEach((edge) => {
+            if (edge.keep) {
+                result.push(edge.k0, edge.k1);
+            }
+        });
+        return result;
     }
 
     private readShape(version: number): ShapeRecord[] {
