@@ -1,9 +1,9 @@
 ﻿import { State } from './common/state';
-import { ModelGeometry, ReaderOptions, Region } from './reader/model-geometry';
-import { ModelHandle, DrawMode } from './model-handle';
 import { Framebuffer } from './framebuffer';
-import { SceneTarget } from './scene-target';
+import { DrawMode, ModelHandle } from './model-handle';
 import { ModelPointers } from './model-pointers';
+import { ModelGeometry, ReaderOptions, Region } from './reader/model-geometry';
+import { SceneTarget } from './scene-target';
 import { worker as LoaderWorker } from './workers/worker';
 
 // shaders GLSL 100 ES
@@ -14,26 +14,26 @@ import { fragment_shader_300 } from './shaders/fragment_shader_300';
 import { vertex_shader_300 } from './shaders/vertex_shader_300';
 
 //ported libraries
-import { WebGLUtils } from './common/webgl-utils';
-import { LoadingPhase, Message, MessageType } from './common/message';
-import { IPlugin } from './plugins/plugin';
-import { ViewerEventMap, ViewerInteractionEventMap } from './common/viewer-event-map';
-import { MouseNavigation } from './navigation/mouse-navigation';
-import { KeyboardNavigation } from './navigation/keyboard-navigation';
-import { TouchNavigation } from './navigation/touch-navigation';
-import { Abilities } from './common/abilities';
-import { CheckResult, } from './common/checkResult';
-import { Animations } from './navigation/animations';
-import { mat4, vec3, mat3, quat } from 'gl-matrix';
-import { PerformanceRating } from './performance-rating';
+import { mat3, mat4, quat, vec3 } from 'gl-matrix';
 import { CameraProperties, CameraType } from './camera';
-import { SectionBox } from './section-box';
+import { Abilities } from './common/abilities';
 import { BBox } from './common/bbox';
-import { CameraAdjustment } from './navigation/camera-adjustment';
-import { PreflightCheck } from './navigation/preflight-check';
-import { ProductType } from './product-type';
-import { ProductAnalyticalResult } from './common/product-analytical-result';
+import { CheckResult, } from './common/checkResult';
 import { FpsWatch } from './common/fps-watch';
+import { LoadingPhase, Message, MessageType } from './common/message';
+import { ProductAnalyticalResult } from './common/product-analytical-result';
+import { ViewerEventMap, ViewerInteractionEventMap } from './common/viewer-event-map';
+import { WebGLUtils } from './common/webgl-utils';
+import { Animations } from './navigation/animations';
+import { CameraAdjustment } from './navigation/camera-adjustment';
+import { KeyboardNavigation } from './navigation/keyboard-navigation';
+import { MouseNavigation } from './navigation/mouse-navigation';
+import { PreflightCheck } from './navigation/preflight-check';
+import { TouchNavigation } from './navigation/touch-navigation';
+import { PerformanceRating } from './performance-rating';
+import { IPlugin } from './plugins/plugin';
+import { ProductType } from './product-type';
+import { SectionBox } from './section-box';
 
 export type NavigationMode = 'pan' | 'zoom' | 'orbit' | 'fixed-orbit' | 'free-orbit' | 'none' | 'look-around' | 'walk' | 'look-at' | 'locked-orbit';
 
@@ -340,7 +340,7 @@ export class Viewer {
     private _xrayColour: number[] = [80, 80, 80, 150];
     private _spaceEdgesVisible: boolean = true;
     private _spaceEdgeColour: number[] = [9, 87, 117, 200];
-    private _spaceFillColour: number[] = null; // null keeps the model's default space style
+    private _spaceFillColour: number[] = null; // null keeps the model's default space style see model-geometry.ts
     private _mvMatrix: mat4 = mat4.create();
     private _pMatrix: mat4 = mat4.create();
 
