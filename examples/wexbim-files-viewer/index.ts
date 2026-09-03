@@ -60,6 +60,8 @@ viewer.on("loaded", (evt) => {
     // viewer.spaceEdgesVisible = false;
     viewer.show(ViewType.DEFAULT, undefined, undefined, false);
     loader.hide();
+    // aktuellen Zustand der Sichtbarkeits-Checkboxen auf das neu geladene Modell anwenden
+    applyVisibility();
     refreshModelsPanel();
 });
 viewer.on("fps", (fps) => {
@@ -92,6 +94,28 @@ document.addEventListener('keydown', keyEvent => {
         input.click();
     }
 });
+
+// Sichtbarkeit von Wänden, Decken und Räumen über Checkboxen steuern
+const wallsCheckbox = document.getElementById('chk-walls') as HTMLInputElement;
+const slabsCheckbox = document.getElementById('chk-slabs') as HTMLInputElement;
+const spacesCheckbox = document.getElementById('chk-spaces') as HTMLInputElement;
+
+// setzt die Sichtbarkeit eines Produkttyps in allen geladenen Modellen
+function applyTypeVisibility(type: ProductType, visible: boolean) {
+    const state = visible ? State.UNDEFINED : State.HIDDEN;
+    models.forEach((m) => viewer.setState(state, type, m.id));
+    viewer.draw();
+}
+
+function applyVisibility() {
+    applyTypeVisibility(ProductType.IFCWALLSTANDARDCASE, wallsCheckbox.checked);
+    applyTypeVisibility(ProductType.IFCSLAB, slabsCheckbox.checked);
+    applyTypeVisibility(ProductType.IFCSPACE, spacesCheckbox.checked);
+}
+
+wallsCheckbox.addEventListener('change', () => applyTypeVisibility(ProductType.IFCWALLSTANDARDCASE, wallsCheckbox.checked));
+slabsCheckbox.addEventListener('change', () => applyTypeVisibility(ProductType.IFCSLAB, slabsCheckbox.checked));
+spacesCheckbox.addEventListener('change', () => applyTypeVisibility(ProductType.IFCSPACE, spacesCheckbox.checked));
 
 function refreshModelsPanel() {
     var html = "<table>";
