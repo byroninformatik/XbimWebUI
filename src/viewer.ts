@@ -138,15 +138,49 @@ export class Viewer {
 
     /**
      * Array of four integers between 0 and 255 (RGBA) for the IfcSpace/opening fill colour and
-     * transparency. Setting it recolours all spaces of all loaded models at once; models loaded
-     * afterwards keep this colour too. Lower the alpha to make spaces more transparent.
+     * transparency. Setting it recolours all spaces of all loaded models at once and is also mirrored
+     * into {@link Viewer#readerOptions}.spaceFillColour, so models loaded afterwards inherit this
+     * colour too. Lower the alpha to make spaces more transparent.
+     *
+     * Note: whether a space is rendered transparently (alpha &lt; 254) or as an opaque solid
+     * (alpha &gt;= 254) is decided when a model is parsed, not when it is drawn. Recolouring at
+     * runtime only swaps the fill colour of already-loaded models; changing the alpha across that
+     * threshold therefore requires reloading the models to take effect. When such a threshold change
+     * happens while models are loaded, a console warning is emitted.
      * @member {Number[]} Viewer#spaceFillColour
      */
     public get spaceFillColour(): number[] { return this._spaceFillColour; }
     public set spaceFillColour(value: number[]) {
+        // effective previous and new colours (null falls back to the built-in default), used to
+        // detect whether the transparent/opaque classification changes with this new alpha
+        const prev = this._readerOptions.spaceFillColour != null
+            ? this._readerOptions.spaceFillColour
+            : Viewer._DEFAULT_SPACE_FILL_COLOUR;
+        const next = (value != null && value.length >= 4)
+            ? value
+            : Viewer._DEFAULT_SPACE_FILL_COLOUR;
+        const wasTransparent = prev[3] < Viewer._SPACE_OPACITY_THRESHOLD;
+        const willBeTransparent = next[3] < Viewer._SPACE_OPACITY_THRESHOLD;
+
         this._spaceFillColour = value;
+        // recolour all currently loaded models (texture only - does not change their render pass)
         this._handles.forEach((h) => h.setSpaceFillColour(value));
+        // mirror into the parse-time options so models loaded afterwards inherit this colour (and,
+        // via its alpha, the opaque/transparent decision). Store a copy to avoid aliasing the
+        // internal field with the public options object.
+        this._readerOptions.spaceFillColour = value != null ? value.slice() : null;
         this.changed = true;
+
+        // the transparent/opaque split is baked when a model is parsed, so crossing the threshold
+        // only affects models loaded afterwards. Warn if models are already on screen.
+        if (wasTransparent !== willBeTransparent && this._handles.length > 0) {
+            console.warn(
+                'Viewer.spaceFillColour: changing the fill alpha across the opacity threshold ' +
+                '(alpha < 254 = transparent, >= 254 = opaque) changes how spaces are rendered. ' +
+                'This split is fixed when a model is parsed, so it only affects models loaded ' +
+                'afterwards. Reload the currently loaded models to apply it.'
+            );
+        }
     }
 
     /**
@@ -341,6 +375,12 @@ export class Viewer {
     private _spaceEdgesVisible: boolean = true;
     private _spaceEdgeColour: number[] = [9, 87, 117, 200];
     private _spaceFillColour: number[] = null; // null keeps the model's default space style see model-geometry.ts
+    // Default space/opening fill colour and the alpha threshold that decides whether a space is built
+    // into the transparent or the solid index partition. The authoritative copies live in
+    // model-geometry.ts (parse side); these mirror them so the setter below can classify a colour.
+    private static readonly _DEFAULT_SPACE_FILL_COLOUR: number[] = [9, 87, 117, 120];
+    public get DEFAULT_SPACE_FILL_COLOUR() { return Viewer._DEFAULT_SPACE_FILL_COLOUR; }
+    private static readonly _SPACE_OPACITY_THRESHOLD: number = 254; // a fill is transparent when alpha < 254
     private _mvMatrix: mat4 = mat4.create();
     private _pMatrix: mat4 = mat4.create();
 

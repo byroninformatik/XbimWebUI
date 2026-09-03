@@ -1,11 +1,14 @@
-import { Viewer, State, ViewType, RenderingMode, ProductType, NavigationCube, ViewerInteractionEvent, InteractiveClippingPlane } from '../..';
-import { Grid } from '../../src/plugins/Grid/grid';
 import { vec3 } from 'gl-matrix';
+import { InteractiveClippingPlane, NavigationCube, ProductType, RenderingMode, State, Viewer, ViewerInteractionEvent, ViewType } from '../..';
 import { Viewpoint } from '../../src/bcf';
+import { Grid } from '../../src/plugins/Grid/grid';
 import { LoaderOverlay } from '../../src/plugins/LoaderOverlay/loader-overlay';
 import { PlaySpaces } from '../featured-viewer/play-spaces';
 
 var models: any[] = [];
+// merkt sich die geladenen Dateien, damit die Modelle mit geänderten readerOptions
+// (z.B. deckende Räume) neu geparst/geladen werden können
+let loadedSources: { file: File, name: string }[] = [];
 
 var viewer = new Viewer("xBIM-viewer");
 viewer.background = [0, 0, 0, 0];
@@ -80,6 +83,7 @@ input.addEventListener('change', () => {
 
     for (let i = 0; i < input.files.length; i++) {
         const file = input.files[i];
+        loadedSources.push({ file, name: file.name });
         loader.show();
         viewer.load(file, file.name);
         viewer.start();
@@ -117,6 +121,36 @@ wallsCheckbox.addEventListener('change', () => applyTypeVisibility(ProductType.I
 slabsCheckbox.addEventListener('change', () => applyTypeVisibility(ProductType.IFCSLAB, slabsCheckbox.checked));
 spacesCheckbox.addEventListener('change', () => applyTypeVisibility(ProductType.IFCSPACE, spacesCheckbox.checked));
 
+// Räume deckend zeichnen. Die Solid/Transparent-Zuordnung wird beim Parsen fixiert, deshalb
+// werden die readerOptions gesetzt und die bereits geladenen Modelle neu geladen.
+const spacesOpaqueCheckbox = document.getElementById('chk-spaces-opaque') as HTMLInputElement;
+spacesOpaqueCheckbox.addEventListener('change', () => {
+    viewer.spaceFillColour = spacesOpaqueCheckbox.checked
+        ? [9, 87, 117, 255]   // Alpha 255 -> deckend (Solid-Pass)
+        : viewer.DEFAULT_SPACE_FILL_COLOUR;          // Standard: halbtransparent [9, 87, 117, 120]
+    reloadAllModels();
+});
+
+// entlädt alle Modelle und lädt sie mit den aktuellen readerOptions erneut
+function reloadAllModels() {
+    const sources = loadedSources.slice();
+    models.forEach((m) => viewer.unload(m.id));
+    models = [];
+    loadedSources = [];
+
+    if (sources.length === 0) {
+        viewer.draw();
+        return;
+    }
+
+    sources.forEach((s) => {
+        loadedSources.push(s);
+        loader.show();
+        viewer.load(s.file, s.name);
+        viewer.start();
+    });
+}
+
 function refreshModelsPanel() {
     var html = "<table>";
     models.forEach((m) => {
@@ -135,8 +169,16 @@ function refreshModelsPanel() {
     modelsDiv.innerHTML = html;
 }
 function unload(id: number) {
+    const model = models.filter((m) => m.id === id).pop();
     viewer.unload(id);
     models = models.filter((m) => m.id !== id);
+    if (model) {
+        // zugehörige Quelldatei vergessen, damit sie beim Neuladen nicht zurückkehrt
+        const idx = loadedSources.findIndex((s) => s.name === model.name);
+        if (idx >= 0) {
+            loadedSources.splice(idx, 1);
+        }
+    }
     refreshModelsPanel();
     viewer.draw();
 }

@@ -20,6 +20,18 @@ export type ReaderOptions = {
     * but enabling this option will perform the sorting in the browser.
     */
     orderGeometryBySize?: boolean
+
+    /** Optional RGBA fill colour (four integers 0-255) for IfcSpace/opening blocks, applied while the
+    * geometry is parsed. The alpha decides how spaces are rendered: an alpha below 254 draws them
+    * semitransparently in the transparent phase (the default, [9, 87, 117, 120]); an alpha of 254 or
+    * more draws them as opaque solids that write depth like any other solid. The colour (but not this
+    * transparent/opaque decision, which is fixed at load) can still be changed later via
+    * {@link Viewer#spaceFillColour}.
+    *
+    * Note: this property is overwritten as a side effect of setting {@link Viewer#spaceFillColour},
+    * which mirrors its value here so that models loaded afterwards inherit the runtime colour.
+    */
+    spaceFillColour?: number[]
 }
 
 
@@ -164,14 +176,20 @@ export class ModelGeometry {
         this.styles.set([255, 255, 255, 255], iStyle * 4);
         this._styleMap.Add({ id: -1, index: iStyle, transparent: false });
 
-        // default space and opening style (blue, more transparent so the model stays readable;
-        // can be overridden at runtime via viewer.spaceFillColour)
+        // default space and opening style (blue, semitransparent so the model stays readable). The
+        // fill colour can be overridden at load via ReaderOptions.spaceFillColour; the colour alone
+        // (not the transparent/opaque decision below) can also be changed at runtime via
+        // viewer.spaceFillColour.
         iStyle++;
-        this.styles.set([9, 87, 117, 120], iStyle * 4);
-        // alpha 120 < 254, so this fill is semitransparent: flag it as such so spaces are rendered
-        // in the transparent phase (after all solids from every model). Otherwise spaces write depth
-        // during the solid phase and occlude solid geometry sitting inside them from other models.
-        this._styleMap.Add({ id: -2, index: iStyle, transparent: true });
+        const spaceFill = (options.spaceFillColour && options.spaceFillColour.length === 4)
+            ? options.spaceFillColour
+            : [9, 87, 117, 120];
+        this.styles.set(spaceFill, iStyle * 4);
+        // Derive the transparency flag from the alpha, exactly like every other style above. A
+        // semitransparent fill (alpha < 254) is rendered in the transparent phase, after all solids
+        // from every model, so it does not write depth and occlude solid geometry sitting inside the
+        // spaces. An opaque fill (alpha >= 254) is rendered as a normal solid that writes depth.
+        this._styleMap.Add({ id: -2, index: iStyle, transparent: spaceFill[3] < 254 });
         this.spaceStyleIndex = iStyle;
 
         for (let i = 0; i < numProducts; i++) {
