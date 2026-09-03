@@ -168,7 +168,10 @@ export class ModelGeometry {
         // can be overridden at runtime via viewer.spaceFillColour)
         iStyle++;
         this.styles.set([9, 87, 117, 120], iStyle * 4);
-        this._styleMap.Add({ id: -2, index: iStyle, transparent: false });
+        // alpha 120 < 254, so this fill is semitransparent: flag it as such so spaces are rendered
+        // in the transparent phase (after all solids from every model). Otherwise spaces write depth
+        // during the solid phase and occlude solid geometry sitting inside them from other models.
+        this._styleMap.Add({ id: -2, index: iStyle, transparent: true });
         this.spaceStyleIndex = iStyle;
 
         for (let i = 0; i < numProducts; i++) {
