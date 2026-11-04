@@ -1115,7 +1115,8 @@ export class Viewer {
             width = height * viewRatio;
         }
 
-        const minDistance = this.cameraProperties.near + sizes.depth / 2.0;
+        // model based near, not the adaptive cameraProperties.near (it follows the camera distance every frame)
+        const minDistance = this.meter / 4 + sizes.depth / 2.0;
         const optimalDistance = height / (Math.tan(this.cameraProperties.fov * Math.PI / 180.0 / 2.0) * 2.0) + sizes.depth / 2.0;
 
         return {
