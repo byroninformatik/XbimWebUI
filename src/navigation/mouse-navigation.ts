@@ -36,6 +36,23 @@ export class MouseNavigation {
         return vec3.transformMat4(vec3.create(), point, viewer.mvMatrix)[2] < 0;
     }
 
+    /**
+     * Pivot for a pointer over empty space without a usable last pivot: on the pointer ray, as deep as what is visible in the
+     * centre of the view, or else as the model centre, which may lie far off in large or georeferenced models.
+     * Null if there is nothing in the viewer.
+     */
+    private static getFallbackPivot(viewer: Viewer, event: MouseEvent): vec3 {
+        let reference = viewer.getEventData(viewer.width / 2, viewer.height / 2)?.xyz;
+        if (reference == null) {
+            const region = viewer.getMergedRegion();
+            if (region == null || region.centre == null) {
+                return null;
+            }
+            reference = vec3.fromValues(region.centre[0], region.centre[1], region.centre[2]);
+        }
+        return MouseNavigation.getPointerRayPoint(viewer, event, reference);
+    }
+
     public static initMouseEvents(viewer: Viewer) {
         let mouseDown = false;
         let lastMouseX = null;
@@ -83,13 +100,12 @@ export class MouseNavigation {
                 if (lastPivot != null && MouseNavigation.isInFront(viewer, lastPivot)) {
                     origin = lastPivot;
                 } else {
-                    const region = viewer.getMergedRegion();
-                    if (region == null || region.centre == null) {
+                    origin = MouseNavigation.getFallbackPivot(viewer, event);
+                    if (origin == null) {
                         // there is nothing in the viewer
                         mouseDown = false;
                         return;
                     }
-                    origin = vec3.fromValues(region.centre[0], region.centre[1], region.centre[2]);
                 }
             } else if (data.xyz == null) {
                 const bb = viewer.getTargetBoundingBox(data.id, data.model);
@@ -272,13 +288,7 @@ export class MouseNavigation {
                         // nothing under the pointer: zoom towards the point on the pointer ray at the depth of the last pivot
                         scrollOrigin = MouseNavigation.getPointerRayPoint(viewer, event, lastPivot);
                     } else {
-                        var region = viewer.getMergedRegion();
-
-                        if(region && region.centre) {
-                            var centre = vec3.fromValues(region.centre[0], region.centre[1], region.centre[2]);
-                            // no usable pivot yet: at the depth of the model centre
-                            scrollOrigin = MouseNavigation.getPointerRayPoint(viewer, event, centre);
-                        }
+                        scrollOrigin = MouseNavigation.getFallbackPivot(viewer, event);
                     }
     
                     lastScrollPoint = scrollPoint;
