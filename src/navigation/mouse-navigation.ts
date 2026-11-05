@@ -253,7 +253,7 @@ export class MouseNavigation {
                 };
     
                 //deltaX and deltaY have very different values in different web browsers so fixed value is used for constant functionality.
-                viewer.navigate('zoom', sign(event.deltaX) * -1.0, sign(event.deltaY) * -1.0, scrollOrigin);
+                viewer.navigate('zoom', sign(event.deltaX) * -1.0, sign(event.deltaY) * -viewer.wheelZoomSpeed, scrollOrigin);
             } catch(e){
                 console.error(e);
             }

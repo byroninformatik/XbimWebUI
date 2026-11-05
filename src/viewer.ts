@@ -345,6 +345,11 @@ export class Viewer {
     public zoomDuration: number = 1000;
 
     /**
+     * Multiplier for the zoom step of one mouse wheel notch. 1 moves the camera by 1/20 of its distance to the model.
+     */
+    public wheelZoomSpeed: number = 1;
+
+    /**
      * Animations functionality
      */
     public animations: Animations;
