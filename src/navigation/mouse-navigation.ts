@@ -32,6 +32,10 @@ export class MouseNavigation {
         return vec3.scaleAndAdd(vec3.create(), eye, viewDirection, depth);
     }
 
+    private static isInFront(viewer: Viewer, point: vec3): boolean {
+        return vec3.transformMat4(vec3.create(), point, viewer.mvMatrix)[2] < 0;
+    }
+
     public static initMouseEvents(viewer: Viewer) {
         let mouseDown = false;
         let lastMouseX = null;
@@ -45,6 +49,8 @@ export class MouseNavigation {
         let isPointerLocked = false;
 
         let origin = vec3.create();
+        // last point hit under the pointer when orbiting or zooming; used where the pointer is over empty space
+        let lastPivot: vec3 = null;
 
         //set initial conditions so that different gestures can be identified
         const handleMouseDown = (event: MouseEvent) => {
@@ -73,18 +79,25 @@ export class MouseNavigation {
             if (viewer.navigationMode === 'locked-orbit') {
                 origin = viewer.lockedOrbitOrigin;
             } else  if (data == null || data.id == null || data.model == null) {
-                const region = viewer.getMergedRegion();
-                if (region == null || region.centre == null) {
-                    // there is nothing in the viewer
-                    mouseDown = false;
-                    return;
+                // nothing under the pointer: keep the last pivot, the model centre may be far away once zoomed in
+                if (lastPivot != null && MouseNavigation.isInFront(viewer, lastPivot)) {
+                    origin = lastPivot;
+                } else {
+                    const region = viewer.getMergedRegion();
+                    if (region == null || region.centre == null) {
+                        // there is nothing in the viewer
+                        mouseDown = false;
+                        return;
+                    }
+                    origin = vec3.fromValues(region.centre[0], region.centre[1], region.centre[2]);
                 }
-                origin = vec3.fromValues(region.centre[0], region.centre[1], region.centre[2]);
             } else if (data.xyz == null) {
                 const bb = viewer.getTargetBoundingBox(data.id, data.model);
                 origin = vec3.fromValues(bb[0] + bb[3] / 2.0, bb[1] + bb[4] / 2.0, bb[2] + bb[5] / 2.0);
+                lastPivot = origin;
             } else {
                 origin = data.xyz
+                lastPivot = vec3.clone(origin);
             }
 
             //keep information about the mouse button
@@ -253,12 +266,17 @@ export class MouseNavigation {
                 if (lastScrollPoint == null || vec2.dist(lastScrollPoint, scrollPoint) > 5 || scrollCounter > 10) {
                     scrollOrigin = viewer.getInteractionOrigin(event);
                     
-                    if (scrollOrigin == null) {
+                    if (scrollOrigin != null) {
+                        lastPivot = vec3.clone(scrollOrigin);
+                    } else if (lastPivot != null && MouseNavigation.isInFront(viewer, lastPivot)) {
+                        // nothing under the pointer: zoom towards the point on the pointer ray at the depth of the last pivot
+                        scrollOrigin = MouseNavigation.getPointerRayPoint(viewer, event, lastPivot);
+                    } else {
                         var region = viewer.getMergedRegion();
 
                         if(region && region.centre) {
                             var centre = vec3.fromValues(region.centre[0], region.centre[1], region.centre[2]);
-                            // nothing under the pointer: zoom towards the point on the pointer ray at the depth of the model centre
+                            // no usable pivot yet: at the depth of the model centre
                             scrollOrigin = MouseNavigation.getPointerRayPoint(viewer, event, centre);
                         }
                     }

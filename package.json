@@ -2,7 +2,7 @@
   "name": "@byroninformatik/wexbim-viewer",
   "description": "WebGL 3D viewer for wexBIM files",
   "license": "CDDL-1.0",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "devDependencies": {
     "@types/node": "18.11.14",
     "@types/webgl2": "0.0.6",
