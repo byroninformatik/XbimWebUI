@@ -404,7 +404,7 @@ export class Viewer {
     private _reversedActiveThisPass: boolean = false;
     // upper bound for the far/near ratio used by the per-frame adaptive near/far. When the camera is
     // close to / inside the model the nearest bbox corner projects behind the camera (minProj <= 0),
-    // so near falls back to far/maxNearFarRatio. Keep this modest (50, matching the proven WebViewer
+    // so near falls back to far/maxNearFarRatio, at most the model's near. Keep this modest (50, matching the proven WebViewer
     // setting): a large value lets near collapse toward 0, which makes the projection degenerate and
     // destroys depth precision (reversed-Z included).
     private _maxNearFarRatio: number = 50;
@@ -2043,8 +2043,10 @@ export class Viewer {
 
         const far = maxProj;
         // near = nearest visible surface (no clipping). Floored so it stays positive and the ratio
-        // stays bounded when the camera is inside the model.
-        let near = Math.max(minProj, far / this._maxNearFarRatio);
+        // stays bounded when the camera is inside the model, but never above the model's near:
+        // in a large model far / maxNearFarRatio alone would clip everything within metres.
+        const floor = Math.min(far / this._maxNearFarRatio, Viewer.modelNear(this.meter));
+        let near = Math.max(minProj, floor);
         near = Math.max(near, far / 1e6);
 
         const props = this.cameraProperties;
