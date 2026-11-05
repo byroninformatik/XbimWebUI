@@ -3,6 +3,35 @@ import { ProductIdentity } from "../common/product-identity";
 import { vec3, mat4, quat, vec2 } from "gl-matrix";
 
 export class MouseNavigation {
+    /**
+     * Point on the ray from the camera through the pointer that lies as deep in the view as the reference point.
+     * Falls back to the point straight ahead at that depth if the ray runs parallel to the image plane.
+     */
+    private static getPointerRayPoint(viewer: Viewer, event: MouseEvent, reference: vec3): vec3 {
+        const eye = viewer.getCameraPosition();
+        const inverseMv = mat4.invert(mat4.create(), viewer.mvMatrix);
+        const rotation = mat4.getRotation(quat.create(), inverseMv);
+        const viewDirection = vec3.normalize(vec3.create(), vec3.transformQuat(vec3.create(), [0, 0, -1], rotation));
+        const depth = vec3.dot(vec3.subtract(vec3.create(), reference, eye), viewDirection);
+
+        // unproject the pointer onto the near and the far plane; works for perspective and orthogonal cameras alike
+        const rect = viewer.canvas.getBoundingClientRect();
+        const x = (event.clientX - rect.left) / rect.width * 2 - 1;
+        const y = 1 - (event.clientY - rect.top) / rect.height * 2;
+        const inverse = mat4.invert(mat4.create(), mat4.multiply(mat4.create(), viewer.pMatrix, viewer.mvMatrix));
+        if (inverse != null) {
+            const near = vec3.transformMat4(vec3.create(), [x, y, -1], inverse);
+            const far = vec3.transformMat4(vec3.create(), [x, y, 1], inverse);
+            const ray = vec3.normalize(vec3.create(), vec3.subtract(vec3.create(), far, near));
+            const along = vec3.dot(ray, viewDirection);
+            if (Math.abs(along) > 1e-6) {
+                const t = (depth - vec3.dot(vec3.subtract(vec3.create(), near, eye), viewDirection)) / along;
+                return vec3.scaleAndAdd(vec3.create(), near, ray, t);
+            }
+        }
+        return vec3.scaleAndAdd(vec3.create(), eye, viewDirection, depth);
+    }
+
     public static initMouseEvents(viewer: Viewer) {
         let mouseDown = false;
         let lastMouseX = null;
@@ -226,16 +255,11 @@ export class MouseNavigation {
                     
                     if (scrollOrigin == null) {
                         var region = viewer.getMergedRegion();
-    
+
                         if(region && region.centre) {
                             var centre = vec3.fromValues(region.centre[0], region.centre[1], region.centre[2]);
-                            var eye = viewer.getCameraPosition();
-                            var distance = vec3.distance(centre,  eye);
-                            var trans = mat4.invert(mat4.create(), viewer.mvMatrix);
-                            var rotation = mat4.getRotation(quat.create(), trans);
-                            var dir = vec3.normalize(vec3.create(), vec3.transformQuat(vec3.create(), [0,0,-1], rotation));
-                            var move = vec3.scale(vec3.create(), dir, distance);
-                            scrollOrigin = vec3.add(vec3.create(), move, eye);
+                            // nothing under the pointer: zoom towards the point on the pointer ray at the depth of the model centre
+                            scrollOrigin = MouseNavigation.getPointerRayPoint(viewer, event, centre);
                         }
                     }
     
