@@ -1627,9 +1627,12 @@ export class Viewer {
                 return;
             case 'zoom':
                 const direction = vec3.subtract(vec3.create(), origin, camera);
-                // smooth zooming animation
-                const move = deltaY * Math.max(distance, this.meter * this.zoomMinStepDistance) / 20;
-                this.animations.addZoom(move, 0, direction);
+                const minStepDistance = this.meter * this.zoomMinStepDistance;
+                // Once a step has carried the camera past the origin, the direction towards it would point backwards and
+                // the next step would reverse the zoom. Keep moving along the view direction instead.
+                const isOriginAhead = mvOrigin[2] < 0;
+                const move = deltaY * (isOriginAhead ? Math.max(distance, minStepDistance) : minStepDistance) / 20;
+                this.animations.addZoom(move, 0, isOriginAhead ? direction : undefined);
                 return;
             default:
                 break;
