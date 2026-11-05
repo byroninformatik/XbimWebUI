@@ -35,7 +35,7 @@ export class TriangulatedShape {
                 var normal0 = binReader.readUint8();
                 var normal1 = binReader.readUint8();
                 //read and set all indices
-                binReader.readIntegersInto(self.indices, iIndex, 3 * numTrianglesInFace, indexSize);
+                binReader.readIndicesInto(self.indices, iIndex, 3 * numTrianglesInFace, indexSize);
 
                 for (var j = 0; j < numTrianglesInFace * 3; j++) {
                     //add three identical normals because this is planar but needs to be expanded for WebGL
@@ -46,8 +46,8 @@ export class TriangulatedShape {
             } else {
                 //each corner of each triangle: vertex index followed by its packed normal
                 for (var j = 0; j < numTrianglesInFace * 3; j++) {
-                    binReader.readIntegersInto(self.indices, iIndex, 1, indexSize);
-                    binReader.readIntegersInto(self.normals, iIndex * 2, 2, 1);
+                    binReader.readIndicesInto(self.indices, iIndex, 1, indexSize);
+                    binReader.readBytesInto(self.normals, iIndex * 2, 2);
                     iIndex++;
                 }
             }

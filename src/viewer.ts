@@ -1126,8 +1126,8 @@ export class Viewer {
             width = height * viewRatio;
         }
 
-        // model based near, not the adaptive cameraProperties.near (it follows the camera distance every frame)
-        const minDistance = this.meter / 4 + sizes.depth / 2.0;
+        // the model's near, not cameraProperties.near: that one adapts to the camera distance every frame
+        const minDistance = Viewer.modelNear(this.meter) + sizes.depth / 2.0;
         const optimalDistance = height / (Math.tan(this.cameraProperties.fov * Math.PI / 180.0 / 2.0) * 2.0) + sizes.depth / 2.0;
 
         return {
@@ -1412,7 +1412,12 @@ export class Viewer {
         const meter = this.activeHandles[0].meter;
         var maxSize = BBox.getDiagonalSize(region.bbox);
         this.cameraProperties.far = maxSize * 10;
-        this.cameraProperties.near = meter / 4;
+        this.cameraProperties.near = Viewer.modelNear(meter);
+    }
+
+    /** Near plane for a model, a quarter of a metre in its units. */
+    private static modelNear(meter: number): number {
+        return meter / 4;
     }
 
     /**
@@ -1628,8 +1633,7 @@ export class Viewer {
             case 'zoom':
                 const direction = vec3.subtract(vec3.create(), origin, camera);
                 const minStepDistance = this.meter * this.zoomMinStepDistance;
-                // Once a step has carried the camera past the origin, the direction towards it would point backwards and
-                // the next step would reverse the zoom. Keep moving along the view direction instead.
+                // an origin behind the camera no longer gives the zoom direction, the view direction does
                 const isOriginAhead = mvOrigin[2] < 0;
                 const move = deltaY * (isOriginAhead ? Math.max(distance, minStepDistance) : minStepDistance) / 20;
                 this.animations.addZoom(move, 0, isOriginAhead ? direction : undefined);

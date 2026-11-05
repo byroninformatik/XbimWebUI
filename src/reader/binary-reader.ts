@@ -8,6 +8,9 @@ export class BinaryReader {
     private _buffer: ArrayBuffer = null;
     private _view: DataView = null;
     private _position: number = 0;
+    // byte range of this reader within the buffer; a sub reader covers only its data island
+    private _start = 0;
+    private _end: number = null;
     // tslint:disable: no-empty
     private _progress: (message: Message) => void = (m) => { };
     private _lastProgress = 0;
@@ -23,27 +26,32 @@ export class BinaryReader {
      * Current position
      */
     public get Position(): number {
-        return this._position;
+        return this._position - this._start;
     }
 
     /**
-     * Gets reader for a sub array starting at current position.
-     * This enforces isolation of reading within certain data island.
-     * 
+     * Gets reader for a sub array starting at current position. It shares the buffer instead of copying it;
+     * {@link isEOF} tells whether reading stayed within the data island.
+     *
      * @param length Byte length of the data island
      */
     public getSubReader(length: number): BinaryReader {
         var reader = new BinaryReader();
-        //get slice of the data
-        var data = this._buffer.slice(this._position, this._position + length);
-        //load is synchronous with ArrayBuffer argument
-        reader.load(data, null, null);
+        reader._buffer = this._buffer;
+        reader._view = this._view;
+        reader._start = this._position;
+        reader._position = this._position;
+        reader._end = this._position + length;
 
         //move position after the data island
         this._position += length;
 
         //return new reader
         return reader;
+    }
+
+    private get end(): number {
+        return this._end != null ? this._end : this._buffer.byteLength;
     }
 
     /**
@@ -55,6 +63,8 @@ export class BinaryReader {
      */
     public load(source: string | Blob | File | ArrayBuffer, headers: { [name: string]: string }, progress: (message: Message) => void): void {
         this._position = 0;
+        this._start = 0;
+        this._end = null;
         var self = this;
         progress = progress ? progress : (m) => { };
         this._progress = progress;
@@ -148,18 +158,18 @@ export class BinaryReader {
     }
 
     public seek(position: number): void {
-        if (position < 0 || position > this._buffer.byteLength) {
+        if (position < 0 || this._start + position > this.end) {
             throw "Position out of range.";
         }
 
-        this._position = position;
+        this._position = this._start + position;
     }
 
     public isEOF(): boolean {
         if (this._position == null) {
             throw "Position is not defined";
         }
-        return this._position == this._buffer.byteLength;
+        return this._position == this.end;
     }
 
     private readArray<T>(unitSize: number, count: number, ctor: new (data: ArrayBuffer) => T): T {
@@ -254,11 +264,11 @@ export class BinaryReader {
     }
 
     /**
-     * Reads `count` integers of `byteSize` bytes (1 and 2 unsigned, 4 signed) straight into `target` at `targetOffset`.
-     * Unlike the read*Array methods it does not copy the bytes into a new buffer first, which adds up to millions of
-     * allocations for large models.
+     * Reads `count` vertex indices of `byteSize` bytes (1 and 2 unsigned, 4 signed) into `target` at `targetOffset`,
+     * without an intermediate buffer.
      */
-    public readIntegersInto(target: Uint32Array | Uint8Array, targetOffset: number, count: number, byteSize: 1 | 2 | 4): void {
+    public readIndicesInto(target: Uint32Array, targetOffset: number, count: number, byteSize: 1 | 2 | 4): void {
+        BinaryReader.checkTarget(target, targetOffset, count);
         const view = this._view;
         const offset = this.move(byteSize * count);
         if (byteSize === 1) {
@@ -273,6 +283,39 @@ export class BinaryReader {
             for (let i = 0; i < count; i++) {
                 target[targetOffset + i] = view.getInt32(offset + 4 * i, true);
             }
+        }
+    }
+
+    /** Reads `count` bytes into `target` at `targetOffset`, without an intermediate buffer. */
+    public readBytesInto(target: Uint8Array, targetOffset: number, count: number): void {
+        BinaryReader.checkTarget(target, targetOffset, count);
+        const view = this._view;
+        const offset = this.move(count);
+        for (let i = 0; i < count; i++) {
+            target[targetOffset + i] = view.getUint8(offset + i);
+        }
+    }
+
+    /** Reads `count` floats of `byteSize` bytes into `target` at `targetOffset`, without an intermediate buffer. */
+    public readFloatsInto(target: Float32Array, targetOffset: number, count: number, byteSize: 4 | 8): void {
+        BinaryReader.checkTarget(target, targetOffset, count);
+        const view = this._view;
+        const offset = this.move(byteSize * count);
+        if (byteSize === 4) {
+            for (let i = 0; i < count; i++) {
+                target[targetOffset + i] = view.getFloat32(offset + 4 * i, true);
+            }
+        } else {
+            for (let i = 0; i < count; i++) {
+                target[targetOffset + i] = view.getFloat64(offset + 8 * i, true);
+            }
+        }
+    }
+
+    // like TypedArray.set: data beyond the end of the target is an error, not silently dropped
+    private static checkTarget(target: ArrayLike<number>, targetOffset: number, count: number): void {
+        if (targetOffset < 0 || targetOffset + count > target.length) {
+            throw new RangeError(`Data does not fit into the target array (offset ${targetOffset}, count ${count}, length ${target.length}).`);
         }
     }
 

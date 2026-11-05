@@ -447,7 +447,7 @@ export class ModelGeometry {
         const eps = (this.meter || 1000) * 1e-4; // ~0.1 mm for models in millimetres
         const invEps = 1 / eps;
         const q = (v: number) => Math.round(v * invEps);
-        // one id per quantised position, so edges get numeric keys instead of building strings for every corner
+        // one id per quantised position, so edges get numeric keys
         const positionIds = new Int32Array(verts.length / 3);
         const idsByPosition = new Map<string, number>();
         for (let vi = 0; vi < positionIds.length; vi++) {
@@ -476,18 +476,17 @@ export class ModelGeometry {
             const len = Math.hypot(nx, ny, nz) || 1;
             nx /= len; ny /= len; nz /= len;
 
-            const cornerA = [k0, k1, k2];
-            const cornerB = [k1, k2, k0];
-            const viA = [vi0, vi1, vi2];
-            const viB = [vi1, vi2, vi0];
+            // edges k0-k1, k1-k2, k2-k0
             for (let e = 0; e < 3; e++) {
-                const pa = positionIds[viA[e]];
-                const pb = positionIds[viB[e]];
+                const cornerA = 3 * t + e;
+                const cornerB = 3 * t + (e + 1) % 3;
+                const pa = positionIds[idx[cornerA]];
+                const pb = positionIds[idx[cornerB]];
                 const key = pa < pb ? pa * positionCount + pb : pb * positionCount + pa;
                 const existing = edges.get(key);
                 if (!existing) {
                     // first time we see this edge: assume boundary (kept) until a second face appears
-                    edges.set(key, { nx, ny, nz, k0: cornerA[e], k1: cornerB[e], keep: true });
+                    edges.set(key, { nx, ny, nz, k0: cornerA, k1: cornerB, keep: true });
                 } else {
                     // shared edge: keep only if the two faces form a crease (not coplanar)
                     const dot = Math.abs(existing.nx * nx + existing.ny * ny + existing.nz * nz);
@@ -515,12 +514,11 @@ export class ModelGeometry {
             let instanceTypeId = br.readInt16();
             let instanceLabel = br.readInt32();
             let styleId = br.readInt32();
-            let transformation: Float32Array | Float64Array = null;
+            const hasTransformation = repetition > 1;
 
-            if (repetition > 1) {
+            if (hasTransformation) {
                 //version 1 had lower precission of transformation matrices
-                transformation = version === 1 ? br.readFloat32Array(16) : br.readFloat64Array(16);
-                this.matrices.set(transformation, this._iMatrix);
+                br.readFloatsInto(this.matrices, this._iMatrix, 16, version === 1 ? 4 : 8);
                 this._iMatrix += 16;
             }
 
@@ -539,7 +537,7 @@ export class ModelGeometry {
                 iLabel: instanceLabel,
                 style: styleItem.index,
                 transparent: styleItem.transparent,
-                transform: transformation != null ? this._iTransform++ : -1
+                transform: hasTransformation ? this._iTransform++ : -1
             });
         }
         return shapeList;
