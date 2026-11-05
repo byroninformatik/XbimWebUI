@@ -350,6 +350,12 @@ export class Viewer {
     public wheelZoomSpeed: number = 1;
 
     /**
+     * Distance to the zoom target in metres below which the zoom step stops shrinking. Closer to the target, every step
+     * is as long as at this distance, so the camera does not crawl towards a surface and can pass through it.
+     */
+    public zoomMinStepDistance: number = 2;
+
+    /**
      * Animations functionality
      */
     public animations: Animations;
@@ -1622,7 +1628,7 @@ export class Viewer {
             case 'zoom':
                 const direction = vec3.subtract(vec3.create(), origin, camera);
                 // smooth zooming animation
-                const move = deltaY * Math.max(distance, this.meter * 2) / 20;
+                const move = deltaY * Math.max(distance, this.meter * this.zoomMinStepDistance) / 20;
                 this.animations.addZoom(move, 0, direction);
                 return;
             default:
