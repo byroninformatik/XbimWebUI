@@ -377,16 +377,19 @@ export class ModelGeometry {
                 : 0xFF; //0xFF is for the default state
 
             //fix indices to right absolute position. It is relative to the shape.
-            geometry.indices.forEach(idx => {
-                this.indices[iIndex] = idx + this._iVertex / 3;
-                this.products[iIndex] = map.renderId;
+            const shapeIndices = geometry.indices;
+            const vertexBase = this._iVertex / 3;
+            const renderId = map.renderId;
+            for (let k = 0; k < shapeIndices.length; k++) {
+                this.indices[iIndex] = shapeIndices[k] + vertexBase;
+                this.products[iIndex] = renderId;
                 this.styleIndices[iIndex] = shape.style;
                 this.transformations[iIndex] = shape.transform;
                 this.states[2 * iIndex] = state; //set state
                 this.states[2 * iIndex + 1] = 0xFF; //default style
 
                 iIndex++;
-            });
+            }
 
             let end = iIndex;
             map.spans.push(new Int32Array([begin, end]));
@@ -410,12 +413,12 @@ export class ModelGeometry {
 
             // manage breakpoints
             var percent = (this._iIndexForward + this.indices.length - this._iIndexBackward) / this.indices.length * 100;
-            Object.getOwnPropertyNames(this.breaks).forEach(bp => {
+            for (const bp in this.breaks) {
                 const breakPoint = +bp;
                 if (this.breaks[breakPoint].length === 0 && percent > breakPoint) {
                     this.breaks[breakPoint] = [this._iIndexForward, this._iIndexBackward]
                 }
-            });
+            }
         },
             this);
 
@@ -444,12 +447,24 @@ export class ModelGeometry {
         const eps = (this.meter || 1000) * 1e-4; // ~0.1 mm for models in millimetres
         const invEps = 1 / eps;
         const q = (v: number) => Math.round(v * invEps);
-        const posKey = (vi: number) => `${q(verts[vi * 3])}_${q(verts[vi * 3 + 1])}_${q(verts[vi * 3 + 2])}`;
+        // one id per quantised position, so edges get numeric keys instead of building strings for every corner
+        const positionIds = new Int32Array(verts.length / 3);
+        const idsByPosition = new Map<string, number>();
+        for (let vi = 0; vi < positionIds.length; vi++) {
+            const key = `${q(verts[vi * 3])}_${q(verts[vi * 3 + 1])}_${q(verts[vi * 3 + 2])}`;
+            let id = idsByPosition.get(key);
+            if (id === undefined) {
+                id = idsByPosition.size;
+                idsByPosition.set(key, id);
+            }
+            positionIds[vi] = id;
+        }
+        const positionCount = idsByPosition.size;
 
         // keep an edge if its adjacent faces differ by more than 25 degrees (box corners ~90 deg
         // are kept, coplanar diagonals ~0 deg are dropped)
         const creaseCos = Math.cos(25 * Math.PI / 180);
-        const edges = new Map<string, { nx: number, ny: number, nz: number, k0: number, k1: number, keep: boolean }>();
+        const edges = new Map<number, { nx: number, ny: number, nz: number, k0: number, k1: number, keep: boolean }>();
 
         for (let t = 0; t < triCount; t++) {
             const k0 = 3 * t, k1 = 3 * t + 1, k2 = 3 * t + 2;
@@ -466,9 +481,9 @@ export class ModelGeometry {
             const viA = [vi0, vi1, vi2];
             const viB = [vi1, vi2, vi0];
             for (let e = 0; e < 3; e++) {
-                const ka = posKey(viA[e]);
-                const kb = posKey(viB[e]);
-                const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+                const pa = positionIds[viA[e]];
+                const pb = positionIds[viB[e]];
+                const key = pa < pb ? pa * positionCount + pb : pb * positionCount + pa;
                 const existing = edges.get(key);
                 if (!existing) {
                     // first time we see this edge: assume boundary (kept) until a second face appears

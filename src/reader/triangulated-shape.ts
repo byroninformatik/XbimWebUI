@@ -14,14 +14,8 @@ export class TriangulatedShape {
         self.normals = new Uint8Array(numOfTriangles * 6);
         //indices for incremental adding of indices and normals
         var iIndex = 0;
-        var readIndex;
-        if (numVertices <= 0xFF) {
-            readIndex = (count: number) => binReader.readByteArray(count);
-        } else if (numVertices <= 0xFFFF) {
-            readIndex = (count: number) => binReader.readUint16Array(count);
-        } else {
-            readIndex = (count: number) => binReader.readInt32Array(count);
-        }
+        //byte size of a vertex index depends on the number of vertices
+        var indexSize: 1 | 2 | 4 = numVertices <= 0xFF ? 1 : numVertices <= 0xFFFF ? 2 : 4;
 
         var numFaces = binReader.readInt32();
 
@@ -38,29 +32,22 @@ export class TriangulatedShape {
             var isPlanar = numTrianglesInFace > 0;
             numTrianglesInFace = Math.abs(numTrianglesInFace);
             if (isPlanar) {
-                var normal = binReader.readByteArray(2);
+                var normal0 = binReader.readUint8();
+                var normal1 = binReader.readUint8();
                 //read and set all indices
-                var planarIndices = readIndex(3 * numTrianglesInFace);
-                self.indices.set(planarIndices, iIndex);
+                binReader.readIntegersInto(self.indices, iIndex, 3 * numTrianglesInFace, indexSize);
 
                 for (var j = 0; j < numTrianglesInFace * 3; j++) {
                     //add three identical normals because this is planar but needs to be expanded for WebGL
-                    self.normals[iIndex * 2] = normal[0];
-                    self.normals[iIndex * 2 + 1] = normal[1];
+                    self.normals[iIndex * 2] = normal0;
+                    self.normals[iIndex * 2 + 1] = normal1;
                     iIndex++;
                 }
             } else {
-                for (var j = 0; j < numTrianglesInFace; j++) {
-                    self.indices[iIndex] = readIndex(); //a
-                    self.normals.set(binReader.readByteArray(2), iIndex * 2);
-                    iIndex++;
-
-                    self.indices[iIndex] = readIndex(); //b
-                    self.normals.set(binReader.readByteArray(2), iIndex * 2);
-                    iIndex++;
-
-                    self.indices[iIndex] = readIndex(); //c
-                    self.normals.set(binReader.readByteArray(2), iIndex * 2);
+                //each corner of each triangle: vertex index followed by its packed normal
+                for (var j = 0; j < numTrianglesInFace * 3; j++) {
+                    binReader.readIntegersInto(self.indices, iIndex, 1, indexSize);
+                    binReader.readIntegersInto(self.normals, iIndex * 2, 2, 1);
                     iIndex++;
                 }
             }

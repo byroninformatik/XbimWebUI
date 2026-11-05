@@ -253,6 +253,29 @@ export class BinaryReader {
         return this.readArray(4, count, Uint32Array);
     }
 
+    /**
+     * Reads `count` integers of `byteSize` bytes (1 and 2 unsigned, 4 signed) straight into `target` at `targetOffset`.
+     * Unlike the read*Array methods it does not copy the bytes into a new buffer first, which adds up to millions of
+     * allocations for large models.
+     */
+    public readIntegersInto(target: Uint32Array | Uint8Array, targetOffset: number, count: number, byteSize: 1 | 2 | 4): void {
+        const view = this._view;
+        const offset = this.move(byteSize * count);
+        if (byteSize === 1) {
+            for (let i = 0; i < count; i++) {
+                target[targetOffset + i] = view.getUint8(offset + i);
+            }
+        } else if (byteSize === 2) {
+            for (let i = 0; i < count; i++) {
+                target[targetOffset + i] = view.getUint16(offset + 2 * i, true);
+            }
+        } else {
+            for (let i = 0; i < count; i++) {
+                target[targetOffset + i] = view.getInt32(offset + 4 * i, true);
+            }
+        }
+    }
+
     public readFloat32(): number {
         var offset = this.move(4);
         return this._view.getFloat32(offset, true);
