@@ -1,6 +1,6 @@
 import { Viewer } from "../viewer";
 import { ProductIdentity } from "../common/product-identity";
-import { vec3, mat4, quat, vec2 } from "gl-matrix";
+import { vec3, mat4, vec2 } from "gl-matrix";
 
 export class MouseNavigation {
     /**
@@ -9,9 +9,7 @@ export class MouseNavigation {
      */
     private static getPointerRayPoint(viewer: Viewer, event: MouseEvent, reference: vec3): vec3 {
         const eye = viewer.getCameraPosition();
-        const inverseMv = mat4.invert(mat4.create(), viewer.mvMatrix);
-        const rotation = mat4.getRotation(quat.create(), inverseMv);
-        const viewDirection = vec3.normalize(vec3.create(), vec3.transformQuat(vec3.create(), [0, 0, -1], rotation));
+        const viewDirection = vec3.normalize(vec3.create(), viewer.getCameraDirection());
         const depth = vec3.dot(vec3.subtract(vec3.create(), reference, eye), viewDirection);
 
         // unproject the pointer onto the near and the far plane; works for perspective and orthogonal cameras alike
@@ -41,7 +39,7 @@ export class MouseNavigation {
      * centre of the view, or else as the model centre, which may lie far off in large or georeferenced models.
      * Null if there is nothing in the viewer.
      */
-    private static getFallbackPivot(viewer: Viewer, event: MouseEvent): vec3 {
+    private static getFallbackPivot(viewer: Viewer, event: MouseEvent): vec3 | null {
         let reference = viewer.getEventData(viewer.width / 2, viewer.height / 2)?.xyz;
         if (reference == null) {
             const region = viewer.getMergedRegion();
@@ -68,6 +66,9 @@ export class MouseNavigation {
         let origin = vec3.create();
         // last point hit under the pointer when orbiting or zooming; used where the pointer is over empty space
         let lastPivot: vec3 = null;
+        // a pivot of a model that was unloaded, or from before another one came in, may lie where nothing is any more
+        viewer.on('loaded', () => lastPivot = null);
+        viewer.on('unloaded', () => lastPivot = null);
 
         //set initial conditions so that different gestures can be identified
         const handleMouseDown = (event: MouseEvent) => {
@@ -106,6 +107,8 @@ export class MouseNavigation {
                         mouseDown = false;
                         return;
                     }
+                    // the next time the fallback needs no further pick
+                    lastPivot = origin;
                 }
             } else if (data.xyz == null) {
                 const bb = viewer.getTargetBoundingBox(data.id, data.model);
@@ -288,7 +291,8 @@ export class MouseNavigation {
                         // nothing under the pointer: zoom towards the point on the pointer ray at the depth of the last pivot
                         scrollOrigin = MouseNavigation.getPointerRayPoint(viewer, event, lastPivot);
                     } else {
-                        scrollOrigin = MouseNavigation.getFallbackPivot(viewer, event);
+                        // remembered, so that the next recompute needs no further pick
+                        scrollOrigin = lastPivot = MouseNavigation.getFallbackPivot(viewer, event);
                     }
     
                     lastScrollPoint = scrollPoint;

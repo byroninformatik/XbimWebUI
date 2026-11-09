@@ -1273,9 +1273,14 @@ export class Viewer {
         }
 
         const blob = new Blob([LoaderWorker], { type: 'application/javascript' });
-        const worker = new Worker(URL.createObjectURL(blob));
+        const workerUrl = URL.createObjectURL(blob);
+        const worker = new Worker(workerUrl);
         worker.onmessage = (evt) => {
             const msg = evt.data as Message;
+            if (msg.type === MessageType.COMPLETED || msg.type === MessageType.FAILED) {
+                // the worker is done, its code is no longer needed
+                URL.revokeObjectURL(workerUrl);
+            }
 
             if (msg.type === MessageType.COMPLETED) {
                 var geometry = msg.result as ModelGeometry;
@@ -1285,7 +1290,14 @@ export class Viewer {
                 progressProxy(msg);
 
                 // add handle and report progress of GPU feeding
-                const wexBimId = self.addHandle(geometry, tag, progressProxy);
+                let wexBimId: number;
+                try {
+                    wexBimId = self.addHandle(geometry, tag, progressProxy);
+                } catch (e) {
+                    self.error(e?.message ?? String(e));
+                    progressProxy({ message: e?.message ?? String(e), type: MessageType.FAILED, percent: 0, phase: LoadingPhase.LOADING });
+                    return;
+                }
                 // report completed
                 if (progress) {
                     progress({
@@ -1303,6 +1315,10 @@ export class Viewer {
         };
         worker.onerror = (e) => {
             self.error(e.message);
+            // report it to this load's progress too, otherwise the caller never learns that the load failed
+            progressProxy({ message: e.message, type: MessageType.FAILED, percent: 0, phase: LoadingPhase.READING });
+            worker.terminate();
+            URL.revokeObjectURL(workerUrl);
         };
 
         // make sure it is an absolute path
